@@ -17,6 +17,52 @@
 
 #include "ftg_core.h"
 
+#if defined(NFD_USE_GTK_NATIVE_CHOOSER) && !GTK_CHECK_VERSION(3, 20, 0)
+#    error This GTK version is too old for the native file chooser
+#endif
+
+#if NFD_USE_GTK_NATIVE_CHOOSER
+
+typedef GtkFileChooserNative nfd_gtk_chooser_dialog_t;
+
+static nfd_gtk_chooser_dialog_t*
+CreateGtkChooserDialog(const nfdchar_t*     title,
+                       GtkFileChooserAction action,
+                       const nfdchar_t*     accept_label,
+                       const nfdchar_t*     cancel_label)
+{
+    return gtk_file_chooser_native_new(title, NULL, action, accept_label, cancel_label);
+}
+
+static int
+RunGtkChooserDialog(nfd_gtk_chooser_dialog_t* dialog)
+{
+    return gtk_native_dialog_run(GTK_NATIVE_DIALOG(dialog));
+}
+
+#else
+
+typedef GtkWidget nfd_gtk_chooser_dialog_t;
+
+static nfd_gtk_chooser_dialog_t*
+CreateGtkChooserDialog(const nfdchar_t*     title,
+                       GtkFileChooserAction action,
+                       const nfdchar_t*     accept_label,
+                       const nfdchar_t*     cancel_label)
+{
+    return gtk_file_chooser_dialog_new(
+        title, NULL, action, cancel_label, GTK_RESPONSE_CANCEL, accept_label, GTK_RESPONSE_ACCEPT, NULL);
+}
+
+static int
+RunGtkChooserDialog(nfd_gtk_chooser_dialog_t* dialog)
+{
+    return gtk_dialog_run(GTK_DIALOG(dialog));
+}
+
+#endif
+
+
 const char INIT_FAIL_MSG[] = "gtk_init_check failed to initilaize GTK+";
 
 #ifdef __GNUC__
@@ -38,7 +84,7 @@ AddTypeToFilterName(const char* typebuf, char* filterName, size_t bufsize)
 }
 
 static void
-AddFiltersToDialog(GtkWidget* dialog, const char* filterList)
+AddFiltersToDialog(nfd_gtk_chooser_dialog_t* dialog, const char* filterList)
 {
     GtkFileFilter* filter;
     char           typebuf[NFD_MAX_STRLEN] = {0};
@@ -111,7 +157,7 @@ GetFirstFilterExtension(const char* filterList, char outExt[NFD_MAX_STRLEN])
 }
 
 static void
-SetDefaultDir(GtkWidget* dialog, const char* defaultPath)
+SetDefaultDir(nfd_gtk_chooser_dialog_t* dialog, const char* defaultPath)
 {
     fflush(stdout);
     if (!defaultPath || defaultPath[0] == '\0')
@@ -187,7 +233,7 @@ WaitForCleanup(void)
 
 
 static char*
-AllocUserFilename(GtkWidget* dialog, char* gtk_filename)
+AllocUserFilename(nfd_gtk_chooser_dialog_t* dialog, char* gtk_filename)
 {
     // polyfill: if no extension, add the first extension from the
     // gtk file filter.
@@ -213,9 +259,9 @@ AllocUserFilename(GtkWidget* dialog, char* gtk_filename)
 
 
 static void
-ConfigureFocus(GtkWidget* dialog)
+ConfigureFocus(nfd_gtk_chooser_dialog_t* dialog)
 {
-#if defined(GDK_WINDOWING_X11)
+#if defined(GDK_WINDOWING_X11) && !NFD_USE_GTK_NATIVE_CHOOSER
     /* Work around focus issue on X11 (https://github.com/mlabbe/nativefiledialog/issues/79) */
     gtk_widget_show_all(dialog);
     if (GDK_IS_X11_DISPLAY(gdk_display_get_default())) {
@@ -233,22 +279,16 @@ ConfigureFocus(GtkWidget* dialog)
 nfdresult_t
 NFD_OpenDialog(const nfdchar_t* filterList, const nfdchar_t* defaultPath, nfdchar_t** outPath)
 {
-    GtkWidget*  dialog;
-    nfdresult_t result;
+    nfd_gtk_chooser_dialog_t* dialog;
+    nfdresult_t               result;
 
     if (!gtk_init_check(NULL, NULL)) {
         NFDi_SetError(INIT_FAIL_MSG);
         return NFD_ERROR;
     }
 
-    dialog = gtk_file_chooser_dialog_new("Open File",
-                                         NULL,
-                                         GTK_FILE_CHOOSER_ACTION_OPEN,
-                                         "_Cancel",
-                                         GTK_RESPONSE_CANCEL,
-                                         "_Open",
-                                         GTK_RESPONSE_ACCEPT,
-                                         NULL);
+    dialog = CreateGtkChooserDialog(
+        "Open File", GTK_FILE_CHOOSER_ACTION_OPEN, "_Open", "_Cancel");
 
     /* Build the filter list */
     AddFiltersToDialog(dialog, filterList);
@@ -259,14 +299,14 @@ NFD_OpenDialog(const nfdchar_t* filterList, const nfdchar_t* defaultPath, nfdcha
     ConfigureFocus(dialog);
 
     result = NFD_CANCEL;
-    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+    if (RunGtkChooserDialog(dialog) == GTK_RESPONSE_ACCEPT) {
         char* filename;
         filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
         *outPath = AllocUserFilename(dialog, filename);
         g_free(filename);
 
         if (!(*outPath)) {
-            gtk_widget_destroy(dialog);
+            g_object_unref(dialog);
             NFDi_SetError("Error allocating bytes");
             return NFD_ERROR;
         }
@@ -274,7 +314,7 @@ NFD_OpenDialog(const nfdchar_t* filterList, const nfdchar_t* defaultPath, nfdcha
     }
 
     WaitForCleanup();
-    gtk_widget_destroy(dialog);
+    g_object_unref(dialog);
     WaitForCleanup();
 
     return result;
@@ -286,22 +326,16 @@ NFD_OpenDialogMultiple(const nfdchar_t* filterList,
                        const nfdchar_t* defaultPath,
                        nfdpathset_t*    outPaths)
 {
-    GtkWidget*  dialog;
-    nfdresult_t result;
+    nfd_gtk_chooser_dialog_t* dialog;
+    nfdresult_t               result;
 
     if (!gtk_init_check(NULL, NULL)) {
         NFDi_SetError(INIT_FAIL_MSG);
         return NFD_ERROR;
     }
 
-    dialog = gtk_file_chooser_dialog_new("Open Files",
-                                         NULL,
-                                         GTK_FILE_CHOOSER_ACTION_OPEN,
-                                         "_Cancel",
-                                         GTK_RESPONSE_CANCEL,
-                                         "_Open",
-                                         GTK_RESPONSE_ACCEPT,
-                                         NULL);
+    dialog = CreateGtkChooserDialog(
+        "Open Files", GTK_FILE_CHOOSER_ACTION_OPEN, "_Open", "_Cancel");
     gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), TRUE);
 
     /* Build the filter list */
@@ -313,10 +347,10 @@ NFD_OpenDialogMultiple(const nfdchar_t* filterList,
     ConfigureFocus(dialog);
 
     result = NFD_CANCEL;
-    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+    if (RunGtkChooserDialog(dialog) == GTK_RESPONSE_ACCEPT) {
         GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
         if (AllocPathSet(fileList, outPaths) == NFD_ERROR) {
-            gtk_widget_destroy(dialog);
+            g_object_unref(dialog);
             return NFD_ERROR;
         }
 
@@ -324,7 +358,7 @@ NFD_OpenDialogMultiple(const nfdchar_t* filterList,
     }
 
     WaitForCleanup();
-    gtk_widget_destroy(dialog);
+    g_object_unref(dialog);
     WaitForCleanup();
 
     return result;
@@ -333,22 +367,16 @@ NFD_OpenDialogMultiple(const nfdchar_t* filterList,
 nfdresult_t
 NFD_SaveDialog(const nfdchar_t* filterList, const nfdchar_t* defaultPath, nfdchar_t** outPath)
 {
-    GtkWidget*  dialog;
-    nfdresult_t result;
+    nfd_gtk_chooser_dialog_t* dialog;
+    nfdresult_t               result;
 
     if (!gtk_init_check(NULL, NULL)) {
         NFDi_SetError(INIT_FAIL_MSG);
         return NFD_ERROR;
     }
 
-    dialog = gtk_file_chooser_dialog_new("Save File",
-                                         NULL,
-                                         GTK_FILE_CHOOSER_ACTION_SAVE,
-                                         "_Cancel",
-                                         GTK_RESPONSE_CANCEL,
-                                         "_Save",
-                                         GTK_RESPONSE_ACCEPT,
-                                         NULL);
+    dialog = CreateGtkChooserDialog(
+        "Save File", GTK_FILE_CHOOSER_ACTION_SAVE, "_Save", "_Cancel");
     gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
 
     /* Build the filter list */
@@ -359,14 +387,14 @@ NFD_SaveDialog(const nfdchar_t* filterList, const nfdchar_t* defaultPath, nfdcha
     ConfigureFocus(dialog);
 
     result = NFD_CANCEL;
-    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+    if (RunGtkChooserDialog(dialog) == GTK_RESPONSE_ACCEPT) {
         char* filename;
         filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
         *outPath = AllocUserFilename(dialog, filename);
         g_free(filename);
 
         if (!(*outPath)) {
-            gtk_widget_destroy(dialog);
+            g_object_unref(dialog);
             NFDi_SetError("Error allocating bytes");
             return NFD_ERROR;
         }
@@ -375,7 +403,7 @@ NFD_SaveDialog(const nfdchar_t* filterList, const nfdchar_t* defaultPath, nfdcha
     }
 
     WaitForCleanup();
-    gtk_widget_destroy(dialog);
+    g_object_unref(dialog);
     WaitForCleanup();
 
     return result;
@@ -384,22 +412,16 @@ NFD_SaveDialog(const nfdchar_t* filterList, const nfdchar_t* defaultPath, nfdcha
 nfdresult_t
 NFD_PickFolder(const nfdchar_t* defaultPath, nfdchar_t** outPath)
 {
-    GtkWidget*  dialog;
-    nfdresult_t result;
+    nfd_gtk_chooser_dialog_t* dialog;
+    nfdresult_t               result;
 
     if (!gtk_init_check(NULL, NULL)) {
         NFDi_SetError(INIT_FAIL_MSG);
         return NFD_ERROR;
     }
 
-    dialog = gtk_file_chooser_dialog_new("Select folder",
-                                         NULL,
-                                         GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER,
-                                         "_Cancel",
-                                         GTK_RESPONSE_CANCEL,
-                                         "_Select",
-                                         GTK_RESPONSE_ACCEPT,
-                                         NULL);
+    dialog = CreateGtkChooserDialog(
+        "Select Folder", GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, "_Select", "_Cancel");
     gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
 
 
@@ -409,14 +431,14 @@ NFD_PickFolder(const nfdchar_t* defaultPath, nfdchar_t** outPath)
     ConfigureFocus(dialog);
 
     result = NFD_CANCEL;
-    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+    if (RunGtkChooserDialog(dialog) == GTK_RESPONSE_ACCEPT) {
         char* filename;
         filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
         *outPath = AllocUserFilename(dialog, filename);
         g_free(filename);
 
         if (!(*outPath)) {
-            gtk_widget_destroy(dialog);
+            g_object_unref(dialog);
             NFDi_SetError("Error allocating bytes");
             return NFD_ERROR;
         }
@@ -425,7 +447,7 @@ NFD_PickFolder(const nfdchar_t* defaultPath, nfdchar_t** outPath)
     }
 
     WaitForCleanup();
-    gtk_widget_destroy(dialog);
+    g_object_unref(dialog);
     WaitForCleanup();
 
     return result;

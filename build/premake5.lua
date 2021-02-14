@@ -28,6 +28,7 @@ newoption {
    description = "Choose a dialog backend for linux",
    allowed = {
       { "gtk3", "GTK 3 - link to gtk3 directly" },      
+      { "gtk3native", "GTK 3 - link to gtk3 directly, use the native file chooser" },      
       { "zenity", "Zenity - generate dialogs on the end users machine with zenity" }
    }
 }
@@ -107,10 +108,12 @@ workspace "NativeFileDialog"
 
 
 
-    filter {"system:linux", "options:linux_backend=gtk3"}
+    filter {"system:linux", "options:linux_backend=gtk3 or options:linux_backend=gtk3native"}
       language "C"
       files {root_dir.."src/nfd_gtk.c"}
       buildoptions {"`pkg-config --cflags gtk+-3.0`"}
+    filter {"system:linux", "options:linux_backend=gtk3native"}
+      buildoptions {"-DNFD_USE_GTK_NATIVE_CHOOSER=1"}
     filter {"system:linux", "options:linux_backend=zenity"}
       language "C"
       files {root_dir.."src/nfd_zenity.c"}
@@ -166,7 +169,8 @@ local make_test = function(name)
     filter {"configurations:Debug"}
       targetsuffix "_d"
 
-    filter {"configurations:Release", "system:linux", "options:linux_backend=gtk3"}
+    filter {"configurations:Release", "system:linux",
+            "options:linux_backend=gtk3 or options:linux_backend=gtk3native"}
       linkoptions {"-lnfd `pkg-config --libs gtk+-3.0`"}
     filter {"configurations:Release", "system:linux", "options:linux_backend=zenity"}
       linkoptions {"-lnfd"}
@@ -174,7 +178,8 @@ local make_test = function(name)
     filter {"system:macosx"}
       links {"Foundation.framework", "AppKit.framework"}
       
-    filter {"configurations:Debug", "system:linux", "options:linux_backend=gtk3"}
+    filter {"configurations:Debug", "system:linux",
+            "options:linux_backend=gtk3 or options:linux_backend=gtk3native"}
       linkoptions {"-lnfd_d `pkg-config --libs gtk+-3.0`"}
     filter {"configurations:Debug", "system:linux", "options:linux_backend=zenity"}
       linkoptions {"-lnfd_d"}
@@ -202,7 +207,7 @@ newaction
          local premake_dir
          if special then
             if args['linux_backend'] ~= nil then
-               premake_dir = "./"..action.."_"..os_str..'_zenity'
+               premake_dir = "./"..action.."_"..os_str..'_'..args['linux_backend']
             else
                premake_dir = "./"..action.."_"..os_str
             end
@@ -229,6 +234,7 @@ newaction
       premake_do_action("vs2010", "windows", false,{})
       premake_do_action("xcode4", "macosx", false,{})
       premake_do_action("gmake", "linux", true,{})
+      premake_do_action("gmake", "linux", true,{linux_backend='gtk3native'})
       premake_do_action("gmake", "linux", true,{linux_backend='zenity'})
       premake_do_action("gmake", "macosx", true,{})
       premake_do_action("gmake", "windows", true,{})
